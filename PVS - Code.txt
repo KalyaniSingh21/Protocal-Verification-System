@@ -1,0 +1,158 @@
+window_interface
+THEORY
+BEGIN
+Top_Level
+THEORY
+BEGIN
+
+	WINDOWS : TYPE
+	PROCESSES : TYPE
+	LOCATIONS : TYPE
+	SIZES : TYPE
+	REPRESENTATIONS : TYPE
+	DISPLAY_LEVELS : TYPE
+	STATES : TYPE = { Open, Closed, Unused}
+	LAYOUTS (location,size,rep) : TYPE  = { location : LOCATIONS, size : SIZES , rep: REPRESENTATIONS}
+	DISPLAYS  : TYPE  = {  l_1: LAYOUTS, ..., l_n: LAYOUTS}
+	
+	Open : string
+	Closed : string
+	Unused : string
+	Background : LAYOUTS			% windows must overlap Background
+	
+	Null_processes : PROCESSES
+	initial_open_layout : PROCESSES -> LAYOUTS 
+	initial_closed_layout : PROCESSES -> LAYOUTS 
+	initial_state: PROCESSES -> STATES
+	
+	overlaps (x : LAYOUTS , y : LAYOUTS) :  LAYOUTS, LAYOUTS -> bool  		%are x and y overlaps?
+	special : WINDOWS -> bool 			% some windows cant be covered
+	
+	process : WINDOWS->PROCESSES
+	open_layout : WINDOWS -> LAYOUTS
+	closed_layout : WINDOWS -> LAYOUTS
+	state : WINDOWS -> STATES
+	input_focus: WINDOWS -> bool
+	display: VAR DISPLAYS
+	empty : VAR DISPLAYS
+	display_level: WINDOWS->DISPLAY_LEVELS
+
+	% smallest level -> window closest to top and reverse
+	less_or_equal (x,y) : bool = { x: DISPLAY_LEVELS, y: DISPLAY_LEVELS |  x<=y }
+	
+	% w to top
+	to_top_level(w:WINDOWS) : [			
+			 ( FORALL (w2: WINDOWS ) : 
+								(w2/=w)  ->  (less_or_equal(display_level(w), display_level(w2))  AND display_level(w) /= display_level(w2) ) ]
+							
+	set_location ( w:WINDOWS, s:STATES,l:LOCATIONS ) : [
+							(IF (s==Open) 
+							THEN FORALL(w1:WINDOWS) : 
+											(w==w1) -> open_layout(w)[location]=l
+							
+							(IF (s==Closed) 
+							THEN FORALL(w1:WINDOWS) : 
+											(((w==w1) -> closed_layout(w)[location]=l
+
+	set_size(w:WINDOWS, s: STATES, s1: SIZES):  [
+							(IF (s==Open) 
+							THEN FORALL(w1:WINDOWS) : 
+											(((w==w1) -> open_layout(w)[size]=s1 AND NoChange(closed_layout))
+							
+							(IF (s==Closed) 
+							THEN FORALL(w1:WINDOWS) : 
+											(w==w1) -> closed_layout(w)[size]=s1 AND NoChange(open_layout) ]
+							
+	update_display_close(w:WINDOWS) :  [display -> display + closed_layout(w) - open_layout(w) ]
+	update_display_open(w:WINDOWS) :  [display -> display  - closed_layout(w) + open_layout(w) ]
+	update_display_create(w:WINDOWS) :  [
+							IF(state(w) = Open) THEN display -> display   + open_layout(w) ]
+							ELSE 
+								IF(state(w) = Closed) THEN display -> display   + closed_layout(w) ]
+	
+	update_display_destroy(w:WINDOWS) :  [
+							IF(state(w) = Open) THEN display -> display  - open_layout(w) ]
+							ELSE 
+								IF(state(w) = Closed) THEN display -> display  - closed_layout(w) ]
+	
+	update_display_move(w:WINDOWS, y: LOCATIONS) :  [							
+							x : LAYOUTS							
+							IF(state(w) = Open) 
+							THEN ( 	 x= open_layout(w)
+											open_layout(w)[location]=y
+											display -> display  - x + open_layout(w) ]
+							ELSE 
+								IF(state(w) = Closed)
+								THEN ( 	x= closed_layout(w)
+												closed_layout(w)[location]=y
+											    display -> display  - x + closed_layout(w) ]
+												
+	ASSUMING
+		display = empty 
+		FORALL (w: WINDOWS)  state(w) = Unused AND process(w) = Null_process AND input_focus(w) = FALSE
+		FORALL (p: PROCESSES)  overlaps(initial_open_layout(p), Background) =TRUE AND overlaps(initial_closed_layout(p), Background) = TRUE
+	ENDASSUMING
+	
+	ax1 : AXIOM 
+					FORALL (l: LAYOUTS) : 
+						IF( l EXISTS IN display) 
+							THEN EXISTS w: WINDOWS : state(w)=Open AND l=open_layout(w) OR state(w)=Closed AND l=closed_layout(w)
+	
+	ax2 : AXIOM 
+					FORALL (l: LAYOUTS) : 
+						IF( l EXISTS IN display)  THEN overlaps(l,Background)
+	ax3 : AXIOM 
+					FORALL (w: WINDOWS) : 
+						IF( special(w)==TRUE AND state(w) /= Unused)  
+						THEN EXISTS (l: LAYOUTS) : l EXISTS IN display AND ( l == open_layout(w) OR l ==  closed_layout(w))
+																			AND FORALL (l1: LAYOUTS)  :  l/=l1 AND l1 EXISTS IN display IMPLIES overlaps(l1,l)=FALSE
+
+	% transitions in Aslan -> just functions in PVS																			
+	close_window(w:WINDOWS) : [ IF (state(w) == Open AND special(w) ==FALSE) 
+														  THEN state(w) = Closed, update_display_close(w), to_top_level(w) ]
+		
+	open_window(w:WINDOWS) : [ IF (state(w) == Closed) 
+														  THEN state(w) = Open, update_display_open(w), to_top_level(w) ]
+	
+	deestroy_window(w:WINDOWS) : [ IF (state(w) == Open AND state(w) == Closed 
+														  THEN state(w) = Unused, special(w)=FALSE, update_display_destroy(w) ]
+														  
+	create(p:PROCESSES): [ IF(EXISTS w: WINDOWS : state(w)==Unused) 
+											THEN state(w)=initial_state(p) AND open_layout(w) = initial_closed_layout(p)
+														AND closed_layout(w) = initial_open_layout(p) AND process(w)=p AND update_display_create(w) AND to_top_level(w)	]
+														
+	shift_focus(w:WINDOWS) : [ IF(state(w)==Open OR state(w) == Closed) THEN FORALL (w1:WINDOWS)  input_focus(w1) = (w1==w)]
+	
+	move(w:WINDOWS, l:LOCATIONS) : [ IF (special(w) == FALSE AND 
+																													(state(w)==Open AND overlaps(open_layout(w),Background) AND (NOT EXISTS (w1:WINDOWS) : special(1)==TRUE AND state(w1)/= Unused AND overlaps(open_layout(w),open_layout(w1))) 
+																											OR (state(w)==Closed AND overlaps(closed_layout(w),Background) AND (NOT EXISTS (w1:WINDOWS) : special(1)==TRUE AND state(w1)/= Unused AND overlaps(closed_layout(w),open_layout(w1)))))
+																		THEN update_display_move(w,l)
+																		]
+	
+	resize(w:WINDOWS, s:SIZES) : [  IF(state(w) == Open AND special(w) == FALSE 
+																AND  (NOT EXISTS (w1:WINDOWS ) : special(w1)==TRUE AND state(w1) /= Unused 
+																																	AND overlaps(open_layout(w), open_layout(w1))))
+																THEN set_size(w, state(w), s)]
+    
+	to_foreground(w:Windows) : [ IF(state(w) /= Unused AND (NOT EXISTS (w1:WINDOWS) : special(w1)==TRUE AND state(w1)/= Unused
+																											 AND ((state(w) ==Open AND overlaps(open_layout(w),open_layout(w1))) 
+																														OR ((state(w) == Closed) AND overlaps(closed_layout(w), open_layout(w1)))))))
+														 THEN to_top_level(w) ]
+
+END Top_Level														 
+END window_interface														 
+	
+																																	
+	
+	
+
+		
+	
+		
+		
+
+	
+	
+		
+	
+	
